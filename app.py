@@ -1,13 +1,12 @@
-from random import random, randint
+from random import random, randint, sample
 from typing import Sequence
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
-
 
 app = Flask(__name__)
 app.config[
-    'SQLALCHEMY_DATABASE_URI'] = 'sqlite:///ProductDB.db'
+    'SQLALCHEMY_DATABASE_URI'] = 'postgresql://koyeb-adm:MUGok6f2Rezg@ep-steep-sunset-a2a2mckl.eu-central-1.pg.koyeb.app/koyebdb'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
@@ -49,8 +48,35 @@ order_product = db.Table(
 
 
 @app.route('/api/getProducts', methods=['GET'])
-def get_products(product_name):  # put application's code here
-    print()
+def get_products():
+    try:
+        category_id = request.args.get('category_id')
+        products = Product.query.filter_by(categoryId=category_id).all()
+        data = []
+        for product in products:
+            data.append({
+                'id': product.id,
+                'name': product.name,
+                'price': product.price,
+                'imageName': product.imageName,
+                'description': product.description,
+                'categoryId': product.categoryId
+            })
+    except Exception as ex:
+        print(ex)
+    return jsonify(data)
+
+
+@app.route('/api/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    login = data.get('login')
+    password = data.get('password')
+    employee = Employee.query.filter_by(password=password, username=login).first()
+    if employee:
+        return jsonify({'full_name': employee.full_name, 'id': employee.id})
+    else:
+        return jsonify({'error': "no such employee"}), 401
 
 
 @app.route('/')
@@ -70,27 +96,112 @@ def create():
     # category7 = Categories(id=7, name="Блоки питания")
     # db.session.add(category7)
     # db.session.commit()
-    # for i in range(50):
-    #     name = "Процессор " + str(i)
-    #     price = randint(400, 1500)
-    #     description = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore"
-    #     categoryId = 2
-    #     product = Product(name=name, price=price, imageName="CpuImage", description=description, categoryId=categoryId)
-    #     db.session.add(product)
-    #     db.session.commit()
     # db.session.query(Product).delete()
     # db.session.commit()
     products = Product.query.all()
     data = []
-    for product in products:
+    # for product in products:
+    #     data.append({
+    #         'id': product.id,
+    #         'name': product.name,
+    #         'price': product.price,
+    #         'imageName': product.imageName,
+    #         'description': product.description,
+    #         'categoryId': product.categoryId
+    #     })
+    employee = Employee(id=1, username="AwakenOne1", password="12345678", full_name="Дубовик А.Д.")
+    db.session.add(employee)
+    db.session.commit()
+    emp = Employee.query.all()
+    for empl in emp:
         data.append({
-            'id': product.id,
-            'name': product.name,
-            'price': product.price,
-            'imageName': product.imageName,
-            'description': product.description,
-            'categoryId': product.categoryId
+            'id': empl.id,
+            'login': empl.username,
+            'password': empl.password,
+            'full_name': empl.full_name
         })
+    return jsonify(data)
+
+
+@app.route('/api/create_order', methods=['GET'])
+def create_order():
+    user_id = request.args.get('user_id')
+    employee = Employee.query.get(user_id)
+
+    if not employee:
+        return jsonify({'error': 'User not found'}), 404
+
+    num_products = randint(1, 7)
+    products = sample(Product.query.all(), num_products)
+
+    order = Order(employee=employee)
+    order.products = products
+
+    db.session.add(order)
+    db.session.commit()
+
+    order_data = {
+        'order_id': order.id,
+        'products': [{'id': p.id, 'name': p.name, 'price': p.price} for p in order.products]
+    }
+
+    return jsonify(order_data)
+
+
+@app.route('/api/order_stats', methods=['GET'])
+def get_order_stats():
+    total_orders = Order.query.count()
+    total_products_ordered = db.session.query(order_product).count()
+    avg_products_per_order = total_products_ordered / total_orders if total_orders > 0 else 0
+
+    stats = {
+        'total_orders': total_orders,
+        'total_products_ordered': total_products_ordered,
+        'avg_products_per_order': round(avg_products_per_order, 2)
+    }
+
+    return jsonify(stats)
+
+
+@app.route('/api/top_products', methods=['GET'])
+def get_top_products():
+    top_products = db.session.query(
+        Product.id, Product.name, db.func.count(order_product.c.product_id).label('total_ordered')
+    ).join(order_product).group_by(Product.id).order_by(db.desc('total_ordered')).limit(5).all()
+
+    data = [{
+        'id': product.id,
+        'name': product.name,
+        'total_ordered': product.total_ordered
+    } for product in top_products]
+
+    return jsonify(data)
+
+
+@app.route('/api/category_stats', methods=['GET'])
+def get_category_stats():
+    category_stats = db.session.query(
+        Categories.name, db.func.count(Product.id).label('total_products')
+    ).join(Product).group_by(Categories.id).all()
+
+    data = [{
+        'category': stat.name,
+        'total_products': stat.total_products
+    } for stat in category_stats]
+
+    return jsonify(data)
+
+
+@app.route('/api/employee_order_totals', methods=['GET'])
+def get_employee_order_totals():
+    employee_order_totals = db.session.query(
+        Employee.full_name, db.func.sum(Product.price).label('total_ordered')
+    ).join(Order).join(order_product).join(Product).group_by(Employee.id).all()
+
+    data = [{
+        'employee': total.full_name,
+        'total_ordered': total.total_ordered
+    } for total in employee_order_totals]
 
     return jsonify(data)
 
